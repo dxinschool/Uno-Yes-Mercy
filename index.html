@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>UNO Yes Mercy</title>
-    <meta name="theme-color" content="#070b14" />
+    <meta name="theme-color" content="#062014" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&family=Russo+One&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Russo+One&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
@@ -20,9 +20,13 @@
     <main class="app" id="appRoot">
       <section id="lobbyView" class="view active glass">
         <header class="lobby-header">
-          <p class="eyebrow">Premium Multiplayer</p>
+          <p class="eyebrow">UNO No Mercy</p>
           <h1>UNO Yes MERCY</h1>
-          <p class="subtitle">Ruthless stacking, brutal swaps, no second chances.</p>
+          <p class="subtitle">The brutal variant of UNO - stack penalties, swap hands, or get knocked out.</p>
+          <div class="hero-actions">
+            <button id="createRoomBtn" class="btn btn-primary btn-hero">Play Now</button>
+            <button id="joinRoomBtn" class="btn btn-secondary btn-hero">Join Room</button>
+          </div>
         </header>
 
         <div class="lobby-grid">
@@ -44,7 +48,6 @@
           <div class="panel">
             <h2>Create Room</h2>
             <p class="hint">Host up to 10 players and start when 2+ are ready.</p>
-            <button id="createRoomBtn" class="btn btn-primary">Create Room</button>
           </div>
 
           <div class="panel">
@@ -61,24 +64,24 @@
               </div>
               <input id="roomCodeInput" class="room-code-hidden" tabindex="-1" aria-hidden="true" />
             </label>
-            <button id="joinRoomBtn" class="btn btn-secondary">Join Room</button>
           </div>
         </div>
 
         <section class="card-guide glass">
           <div class="card-guide-copy">
-            <p class="eyebrow">Card Guide</p>
-            <h3>How each card behaves</h3>
-            <p class="subtitle">Match by color or value, then use the action cards to pressure the table.</p>
+            <p class="eyebrow">No Mercy Rules</p>
+            <h3>How the chaos works</h3>
+            <p class="subtitle">Match color or value, then push the table with stacked penalties and wild effects.</p>
           </div>
           <div class="card-guide-grid">
             <article><strong>0</strong><span>Rotate all hands clockwise</span></article>
             <article><strong>7</strong><span>Swap hands with any player</span></article>
             <article><strong>Skip</strong><span>Skip the next player</span></article>
             <article><strong>Reverse</strong><span>Flip the turn order</span></article>
-            <article><strong>+2 / +4</strong><span>Force draw stacking pressure</span></article>
+            <article><strong>+2 / +4 / +6 / +10</strong><span>Force stacking pressure by equal or higher draw value</span></article>
             <article><strong>Discard All</strong><span>Discard every card in your hand that matches the played card color</span></article>
-            <article><strong>Wild</strong><span>Choose the active color</span></article>
+            <article><strong>Wild Color Roulette</strong><span>Choose a color, then reveal until you draw it</span></article>
+            <article><strong>Wild Reverse Draw 4</strong><span>Reverse play, then draw 4</span></article>
           </div>
         </section>
 
@@ -168,6 +171,18 @@
       <h2 id="winnerTitle">Winner</h2>
       <p id="winnerSubtitle"></p>
       <button id="closeWinnerBtn" class="btn btn-primary">Back to Lobby</button>
+    </dialog>
+
+    <dialog id="colorChoiceDialog" class="winner-dialog color-choice-dialog">
+      <p class="eyebrow">Wild Card</p>
+      <h2>Choose a color</h2>
+      <p class="subtitle">The next player keeps drawing until they hit the selected color.</p>
+      <div class="color-choice-grid">
+        <button class="btn color-choice red" data-color-choice="red">Red</button>
+        <button class="btn color-choice blue" data-color-choice="blue">Blue</button>
+        <button class="btn color-choice green" data-color-choice="green">Green</button>
+        <button class="btn color-choice yellow" data-color-choice="yellow">Yellow</button>
+      </div>
     </dialog>
 
     <script src="https://unpkg.com/lucide@latest"></script>
