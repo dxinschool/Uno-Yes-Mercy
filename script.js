@@ -5,14 +5,33 @@ const MAX_PLAYERS = 10;
 const UNO_GRACE_MS = 2000;
 
 const COLORS = ["red", "blue", "green", "yellow"];
+const DEFAULT_SERVER_URL = "wss://uno-yes-mercy.onrender.com";
 const VALUE_LABELS = {
   skip: "S",
   reverse: "R",
   draw2: "+2",
+  draw4: "+4",
+  draw6: "+6",
+  draw10: "+10",
   discardall: "DA",
+  skipeveryone: "SE",
   wild: "W",
+  wildreverse4: "WR+4",
+  wilddraw6: "W+6",
+  wilddraw10: "W+10",
   wild4: "+4",
 };
+
+const DRAW_VALUES = new Map([
+  ["draw2", 2],
+  ["draw4", 4],
+  ["draw6", 6],
+  ["draw10", 10],
+  ["wildreverse4", 4],
+  ["wild4", 4],
+]);
+
+const WILD_COLOR_CHOOSERS = new Set(["wild", "wildreverse4", "wild4"]);
 
 let playerProfile = loadProfile();
 let serverUrl = loadServerUrl();
@@ -63,6 +82,7 @@ const el = {
   chatInput: document.getElementById("chatInput"),
   chatSendBtn: document.getElementById("chatSendBtn"),
   turnTimerBar: document.getElementById("turnTimerBar"),
+  colorChoiceDialog: document.getElementById("colorChoiceDialog"),
   winnerDialog: document.getElementById("winnerDialog"),
   winnerTitle: document.getElementById("winnerTitle"),
   winnerSubtitle: document.getElementById("winnerSubtitle"),
@@ -120,6 +140,19 @@ function bindEvents() {
   el.unoBtn.addEventListener("click", () => sendAction({ type: "call-uno" }));
   el.catchUnoBtn.addEventListener("click", catchUnoCandidate);
 
+  el.colorChoiceDialog?.addEventListener("cancel", (event) => {
+    if (isAwaitingColorChoiceForSelf()) {
+      event.preventDefault();
+    }
+  });
+
+  el.colorChoiceDialog?.querySelectorAll("[data-color-choice]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const color = button.getAttribute("data-color-choice");
+      if (color) sendAction({ type: "choose-color", color });
+    });
+  });
+
   el.clickPlayModeBtn.addEventListener("click", () => setPlayMode("single"));
   el.multiSelectModeBtn.addEventListener("click", () => setPlayMode("multi"));
 
@@ -160,6 +193,10 @@ function createRoom() {
     direction: 1,
     pendingDraw: 0,
     pendingType: null,
+    pendingMinDrawValue: 0,
+    colorChoicePlayerId: null,
+    colorChoiceMode: null,
+    colorChoiceCardValue: null,
     skipChain: 0,
     logs: [logLine("System", `Room ${roomCode} created`)],
     chat: [],
@@ -579,7 +616,7 @@ function startGame() {
   }
 
   let top = state.deck.pop();
-  while (top.value === "wild4") {
+  while (isSetupIgnoredCard(top)) {
     state.deck.unshift(top);
     shuffle(state.deck);
     top = state.deck.pop();
@@ -591,19 +628,22 @@ function startGame() {
   state.direction = 1;
   state.pendingDraw = 0;
   state.pendingType = null;
+  state.pendingMinDrawValue = 0;
+  state.colorChoicePlayerId = null;
+  state.colorChoiceMode = null;
+  state.colorChoiceCardValue = null;
   state.skipChain = 0;
   state.phase = "playing";
   state.winnerId = null;
   resetTurnDeadline();
   addLog("Game started");
-
-  applyCardImmediateEffect(top, state.players[state.currentPlayerIndex].id, true);
 }
 
 function playCardsAction(playerId, cardIds) {
   const actorIndex = state.players.findIndex((p) => p.id === playerId);
   const actor = state.players[actorIndex];
   if (!actor || cardIds.length === 0) return;
+  if (state.colorChoicePlayerId === playerId) return;
 
   const inTurn = state.players[state.currentPlayerIndex]?.id === playerId;
   const top = getTopCard();
@@ -615,9 +655,8 @@ function playCardsAction(playerId, cardIds) {
   if (chosen.length !== cardIds.length) return;
 
   const first = chosen[0];
-  const sameValue = chosen.every((c) => c.value === first.value);
-  if (!sameValue) {
-    addLog(`${actor.name} attempted invalid multi-value play`);
+  if (chosen.length > 1) {
+    addLog(`${actor.name} attempted invalid multi-card play`);
     return;
   }
 
@@ -630,7 +669,7 @@ function playCardsAction(playerId, cardIds) {
     addLog(`${actor.name} jumped in!`);
   }
 
-  if (!canPlayCard(first, actor, top, state.currentColor, state.pendingDraw, state.pendingType)) {
+  if (!canPlayCard(first, actor, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue)) {
     addLog(`${actor.name} attempted invalid card`);
     return;
   }
@@ -640,10 +679,7 @@ function playCardsAction(playerId, cardIds) {
     if (idx >= 0) {
       actor.hand.splice(idx, 1);
       state.discardPile.push(card);
-      if (card.color !== "wild") state.currentColor = card.color;
-      if (card.value === "wild" || card.value === "wild4") {
-        state.currentColor = COLORS[Math.floor(Math.random() * COLORS.length)];
-      }
+      if (!isWildCard(card)) state.currentColor = card.color;
     }
   };
 
@@ -660,7 +696,14 @@ function playCardsAction(playerId, cardIds) {
 
   addLog(`${actor.name} played ${chosen.map(cardShort).join(" ")}`);
 
-  if (actor.hand.length === 0) {
+  const requiresSelfChoice = isWildCard(first) && first.value !== "wild";
+  if (requiresSelfChoice) {
+    state.colorChoicePlayerId = playerId;
+    state.colorChoiceMode = "self";
+    state.colorChoiceCardValue = first.value;
+  }
+
+  if (actor.hand.length === 0 && !requiresSelfChoice) {
     finishRound(actor.id);
     return;
   }
@@ -674,11 +717,16 @@ function playCardsAction(playerId, cardIds) {
     actor.unoDeadline = 0;
   }
 
+  if (requiresSelfChoice) {
+    return;
+  }
+
   advanceTurnAfterPlay(chosen[chosen.length - 1], playerId);
 }
 
 function drawCardAction(playerId) {
   if (state.players[state.currentPlayerIndex]?.id !== playerId) return;
+  if (state.colorChoicePlayerId) return;
   const actor = state.players.find((p) => p.id === playerId);
 
   if (state.pendingDraw > 0) {
@@ -686,15 +734,23 @@ function drawCardAction(playerId) {
     addLog(`${actor.name} drew ${state.pendingDraw}`);
     state.pendingDraw = 0;
     state.pendingType = null;
+    state.pendingMinDrawValue = 0;
     nextPlayer();
     resetTurnDeadline();
     return;
   }
 
-  dealCards(actor, 1);
-  addLog(`${actor.name} drew 1`);
-  nextPlayer();
-  resetTurnDeadline();
+  if (hasPlayableCard(actor)) {
+    addLog(`${actor.name} tried to draw with a playable card in hand`);
+    return;
+  }
+
+  const played = drawUntilPlayableAndPlay(actor);
+  if (!played) {
+    addLog(`${actor.name} drew 1`);
+    nextPlayer();
+    resetTurnDeadline();
+  }
 }
 
 function callUnoAction(playerId) {
@@ -718,8 +774,60 @@ function catchUnoAction(playerId, targetId) {
 function chooseColorAction(playerId, color) {
   if (!COLORS.includes(color)) return;
   if (state.players[state.currentPlayerIndex]?.id !== playerId) return;
+  if (state.colorChoicePlayerId !== playerId) return;
+
+  const actor = state.players.find((p) => p.id === playerId);
+  const mode = state.colorChoiceMode;
+  const cardValue = state.colorChoiceCardValue;
+
   state.currentColor = color;
+  state.colorChoicePlayerId = null;
+  state.colorChoiceMode = null;
+  state.colorChoiceCardValue = null;
   addLog(`${findPlayerName(playerId)} chose ${color}`);
+
+  if (mode === "roulette" && actor) {
+    drawUntilColorMatch(actor, color);
+
+    if (actor.hand.length === 1) {
+      actor.unoCalled = false;
+      actor.unoDeadline = Date.now() + UNO_GRACE_MS;
+      addLog(`${actor.name} has one card!`);
+    } else {
+      actor.unoCalled = false;
+      actor.unoDeadline = 0;
+    }
+
+    nextPlayer();
+    resetTurnDeadline();
+    return;
+  }
+
+  if (cardValue === "wildreverse4" || cardValue === "wild4") {
+    state.direction *= -1;
+    if (state.players.length === 2 && actor) {
+      dealCards(actor, state.pendingDraw);
+      addLog(`${actor.name} drew ${state.pendingDraw}`);
+      state.pendingDraw = 0;
+      state.pendingType = null;
+      state.pendingMinDrawValue = 0;
+      state.skipChain += 1;
+    }
+  }
+
+  if (actor && actor.hand.length === 0) {
+    finishRound(actor.id);
+    return;
+  }
+
+  nextPlayer();
+  while (state.skipChain > 0) {
+    addLog(`${state.players[state.currentPlayerIndex].name} was skipped`);
+    state.skipChain -= 1;
+    nextPlayer();
+  }
+
+  resetTurnDeadline();
 }
 
 function swapHandsAction(playerId, targetId) {
@@ -733,14 +841,11 @@ function swapHandsAction(playerId, targetId) {
 }
 
 function applyCardImmediateEffect(card, playerId, initialFlip) {
-  if (card.value === "draw2") {
-    state.pendingDraw += 2;
-    state.pendingType = "draw2";
-  }
-
-  if (card.value === "wild4") {
-    state.pendingDraw += 4;
-    state.pendingType = "wild4";
+  const drawValue = getDrawValue(card);
+  if (drawValue > 0) {
+    state.pendingDraw += drawValue;
+    state.pendingMinDrawValue = Math.max(state.pendingMinDrawValue || 0, drawValue);
+    state.pendingType = "draw";
   }
 
   if (card.value === "reverse" && !initialFlip) {
@@ -749,6 +854,10 @@ function applyCardImmediateEffect(card, playerId, initialFlip) {
 
   if (card.value === "skip") {
     state.skipChain += 1;
+  }
+
+  if (card.value === "skipeveryone") {
+    state.skipChain += Math.max(0, state.players.filter((p) => p.connected || p.ai).length - 1);
   }
 
   if (card.value === "0") {
@@ -767,6 +876,7 @@ function applyCardImmediateEffect(card, playerId, initialFlip) {
       }
     }
   }
+
 }
 
 function advanceTurnAfterPlay(lastCard, playerId) {
@@ -782,17 +892,25 @@ function advanceTurnAfterPlay(lastCard, playerId) {
     nextPlayer();
   }
 
+  if (isRouletteWild(lastCard)) {
+    state.colorChoicePlayerId = state.players[state.currentPlayerIndex]?.id || null;
+    state.colorChoiceMode = "roulette";
+    state.colorChoiceCardValue = lastCard.value;
+    if (state.colorChoicePlayerId) {
+      addLog(`${state.players[state.currentPlayerIndex].name} must choose a color`);
+    }
+  }
+
   if (state.pendingDraw > 0) {
     const current = state.players[state.currentPlayerIndex];
-    const stackable = current.hand.some((card) =>
-      state.pendingType === "draw2" ? card.value === "draw2" : card.value === "wild4",
-    );
+    const stackable = current.hand.some((card) => getDrawValue(card) >= (state.pendingMinDrawValue || 0));
 
     if (!stackable && current.ai) {
       dealCards(current, state.pendingDraw);
       addLog(`${current.name} (AI) drew ${state.pendingDraw}`);
       state.pendingDraw = 0;
       state.pendingType = null;
+      state.pendingMinDrawValue = 0;
       nextPlayer();
     }
   }
@@ -881,7 +999,9 @@ function calculateRoundPoints(winnerId) {
     .flatMap((p) => p.hand)
     .reduce((sum, card) => {
       if (/^\d$/.test(card.value)) return sum + Number(card.value);
-      if (card.value === "wild" || card.value === "wild4") return sum + 50;
+      if (isWildCard(card) || card.value === "wildreverse4" || card.value === "wilddraw6" || card.value === "wilddraw10") {
+        return sum + 50;
+      }
       return sum + 20;
     }, 0);
 }
@@ -935,8 +1055,13 @@ function maybeRunAiTurn() {
   const current = state.players[state.currentPlayerIndex];
   if (!current || !current.ai) return false;
 
+  if (state.colorChoicePlayerId === current.id) {
+    chooseColorAction(current.id, COLORS[Math.floor(Math.random() * COLORS.length)]);
+    return true;
+  }
+
   const top = getTopCard();
-  const playable = current.hand.filter((card) => canPlayCard(card, current, top, state.currentColor, state.pendingDraw, state.pendingType));
+  const playable = current.hand.filter((card) => canPlayCard(card, current, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue));
 
   if (playable.length > 0) {
     playCardsAction(current.id, [playable[0].id]);
@@ -947,16 +1072,16 @@ function maybeRunAiTurn() {
   return true;
 }
 
-function canPlayCard(card, player, top, currentColor, pendingDraw, pendingType) {
+function canPlayCard(card, player, top, currentColor, pendingDraw, pendingMinDrawValue) {
   if (!card || !top) return false;
   if (pendingDraw > 0) {
-    if (pendingType === "draw2") return card.value === "draw2";
-    if (pendingType === "wild4") return card.value === "wild4";
+    const drawValue = getDrawValue(card);
+    return drawValue >= (pendingMinDrawValue || 0);
   }
 
-  const effectiveColor = top.color !== "wild" ? top.color : currentColor;
+  const effectiveColor = isWildCard(top) ? currentColor : top.color;
 
-  if (card.color === "wild") return true;
+  if (isWildCard(card)) return true;
   if (card.color === effectiveColor) return true;
   if (card.value === top.value) return true;
 
@@ -965,7 +1090,7 @@ function canPlayCard(card, player, top, currentColor, pendingDraw, pendingType) 
 
 function isExactMatchJumpIn(card, top) {
   if (!card || !top) return false;
-  if (card.color === "wild" && top.color === "wild") return card.value === top.value;
+  if (isWildCard(card) && isWildCard(top)) return card.value === top.value;
   return card.color === top.color && card.value === top.value;
 }
 
@@ -1019,12 +1144,13 @@ function render() {
 
   const self = getSelf();
   const inTurn = current && self && current.id === self.id;
+  const awaitingColorChoice = state.colorChoicePlayerId === (self && self.id);
 
   el.readyBtn.disabled = state.phase !== "lobby";
   el.startBtn.disabled = !(isHost() && state.phase === "lobby" && state.players.filter((p) => p.ready || p.isHost).length >= 2);
   el.playBtn.hidden = playMode !== "multi";
-  el.playBtn.disabled = playMode !== "multi" || state.phase !== "playing" || !inTurn || selectedCards.size === 0;
-  el.drawBtn.disabled = state.phase !== "playing" || !inTurn;
+  el.playBtn.disabled = playMode !== "multi" || state.phase !== "playing" || !inTurn || selectedCards.size === 0 || awaitingColorChoice;
+  el.drawBtn.disabled = state.phase !== "playing" || !inTurn || awaitingColorChoice || (!state.pendingDraw && hasPlayableCard(self));
   el.unoBtn.disabled = !(self && self.hand.length === 1 && state.phase === "playing");
 
   const catchable = state.players.some(
@@ -1039,6 +1165,8 @@ function render() {
   if (!timerAnimFrame) {
     animateTimerBar();
   }
+
+  syncColorChoiceDialog();
 
   syncPlayModeControls();
 }
@@ -1126,10 +1254,11 @@ function renderHand() {
 
   const top = getTopCard();
   const inTurn = state.players[state.currentPlayerIndex]?.id === self.id;
+  const awaitingColorChoice = state.colorChoicePlayerId === self.id;
 
   el.handArea.innerHTML = self.hand
     .map((card, index) => {
-      const playable = inTurn && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingType);
+      const playable = inTurn && !awaitingColorChoice && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue);
       const selected = playMode === "multi" && selectedCards.has(card.id);
       const delay = Math.min(index * 14, 170);
       return `<button class="uno-card card-${card.color} ${selected ? "selected" : ""} ${playable ? "" : "disabled"}" data-card-id="${card.id}" style="--entry-delay:${delay}ms">
@@ -1144,7 +1273,7 @@ function renderHand() {
       if (!id) return;
       const card = self.hand.find((c) => c.id === id);
       if (!card) return;
-      const playable = inTurn && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingType);
+      const playable = inTurn && !awaitingColorChoice && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue);
 
       if (!playable) return;
 
@@ -1202,6 +1331,9 @@ function leaveRoom() {
   }
   state = null;
   selectedCards.clear();
+  if (el.colorChoiceDialog?.open) {
+    el.colorChoiceDialog.close();
+  }
   if (hostTicker) {
     clearInterval(hostTicker);
     hostTicker = null;
@@ -1217,6 +1349,87 @@ function getSelf() {
 function getTopCard() {
   if (!state || state.discardPile.length === 0) return null;
   return state.discardPile[state.discardPile.length - 1];
+}
+
+function isWildCard(card) {
+  return !!card && card.color === "wild";
+}
+
+function isRouletteWild(card) {
+  return !!card && card.value === "wild";
+}
+
+function isSetupIgnoredCard(card) {
+  if (!card) return false;
+  return ["skip", "reverse", "draw2", "draw4", "draw6", "draw10", "discardall", "skipeveryone", "wild", "wildreverse4", "wilddraw6", "wilddraw10", "wild4"].includes(card.value);
+}
+
+function getDrawValue(card) {
+  if (!card) return 0;
+  return DRAW_VALUES.get(card.value) || 0;
+}
+
+function hasPlayableCard(player) {
+  const top = getTopCard();
+  return player.hand.some((card) => canPlayCard(card, player, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue));
+}
+
+function drawUntilPlayableAndPlay(player) {
+  const top = getTopCard();
+  let drawn = 0;
+
+  while (true) {
+    if (state.deck.length === 0) recycleDeck();
+    if (state.deck.length === 0) return false;
+
+    const card = state.deck.pop();
+    player.hand.push(card);
+    drawn += 1;
+
+    if (canPlayCard(card, player, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue)) {
+      if (drawn > 0) addLog(`${player.name} drew ${drawn} card${drawn === 1 ? "" : "s"}`);
+      playCardsAction(player.id, [card.id]);
+      return true;
+    }
+  }
+}
+
+function drawUntilColorMatch(player, color) {
+  let drawn = 0;
+  let matched = false;
+
+  while (true) {
+    if (state.deck.length === 0) recycleDeck();
+    if (state.deck.length === 0) break;
+
+    const card = state.deck.pop();
+    player.hand.push(card);
+    drawn += 1;
+
+    if (card.color === color) {
+      matched = true;
+      break;
+    }
+  }
+
+  if (drawn > 0) {
+    addLog(`${player.name} drew ${drawn} card${drawn === 1 ? "" : "s"}${matched ? ` and hit ${color}` : ` looking for ${color}`}`);
+  }
+}
+
+function syncColorChoiceDialog() {
+  if (!el.colorChoiceDialog) return;
+
+  const shouldOpen = !!state && state.phase === "playing" && state.colorChoicePlayerId === playerProfile.id;
+  if (shouldOpen && !el.colorChoiceDialog.open) {
+    el.colorChoiceDialog.showModal();
+  } else if (!shouldOpen && el.colorChoiceDialog.open) {
+    el.colorChoiceDialog.close();
+  }
+}
+
+function isAwaitingColorChoiceForSelf() {
+  return !!state && state.colorChoicePlayerId === playerProfile.id;
 }
 
 function addLog(text) {
@@ -1260,20 +1473,20 @@ function buildDeck() {
       deck.push(makeCard(color, String(v)));
     }
 
-    ["skip", "reverse", "draw2"].forEach((value) => {
+    ["skip", "reverse", "draw2", "draw4", "draw6", "draw10", "discardall", "skipeveryone"].forEach((value) => {
       deck.push(makeCard(color, value));
       deck.push(makeCard(color, value));
     });
-
-    deck.push(makeCard(color, "discardall"));
   });
 
-  for (let i = 0; i < 4; i += 1) {
+  for (let i = 0; i < 7; i += 1) {
     deck.push(makeCard("wild", "wild"));
   }
 
-  for (let i = 0; i < 8; i += 1) {
-    deck.push(makeCard("wild", "wild4"));
+  for (let i = 0; i < 7; i += 1) {
+    deck.push(makeCard("wild", "wildreverse4"));
+    deck.push(makeCard("wild", "wilddraw6"));
+    deck.push(makeCard("wild", "wilddraw10"));
   }
 
   return deck;
@@ -1303,10 +1516,6 @@ function cardContent(card) {
       <span class="corner br">DA</span>
     </div>`;
   }
-  if (card.value === "wild") return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild" />`;
-  if (card.value === "wild4") {
-    return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild Draw 4" />`;
-  }
   if (card.value === "skip") {
     return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Skip" />`;
   }
@@ -1315,6 +1524,19 @@ function cardContent(card) {
   }
   if (card.value === "draw2") {
     return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Draw 2" />`;
+  }
+  if (card.value === "wild") {
+    return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild Color Roulette" />`;
+  }
+  if (card.value === "wild4") {
+    return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild Reverse Draw 4" />`;
+  }
+  if (card.value === "draw4" || card.value === "draw6" || card.value === "draw10" || card.value === "wildreverse4" || card.value === "wilddraw6" || card.value === "wilddraw10") {
+    return `<div class="card-face-special">
+      <span class="corner tl">${cardFace(card)}</span>
+      <span class="center">${cardFace(card)}</span>
+      <span class="corner br">${cardFace(card)}</span>
+    </div>`;
   }
   return `<div class="card-face-number">
     <span class="corner tl">${cardFace(card)}</span>
@@ -1346,7 +1568,7 @@ function sanitizeRoomCodeChar(value) {
 
 function getSpecialCardAsset(card) {
   if (card.value === "wild") return "assets/special/wild.svg";
-  if (card.value === "wild4") return "assets/special/wild4.svg";
+  if (card.value === "wild4" || card.value === "draw4") return "assets/special/wild4.svg";
 
   const color = COLORS.includes(card.color) ? card.color : "red";
   const map = {
@@ -1439,6 +1661,8 @@ function loadServerUrl() {
 
   const stored = localStorage.getItem(STORAGE_SERVER_KEY);
   if (stored && sanitizeServerUrl(stored)) return stored;
+  // Use the explicit project default backend if available, otherwise fall back to same-host or localhost.
+  if (DEFAULT_SERVER_URL) return DEFAULT_SERVER_URL;
   if (location.protocol === "http:" || location.protocol === "https:") {
     const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
     return `${wsProtocol}//${location.host}`;
