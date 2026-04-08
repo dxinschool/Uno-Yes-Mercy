@@ -181,7 +181,6 @@ function createRoom() {
   const roomCode = generateRoomCode();
   const host = makePlayer(playerProfile.id, playerProfile.name, true);
   state = {
-    phase: "lobby",
     roomCode,
     hostId: host.id,
     version: 1,
@@ -196,7 +195,6 @@ function createRoom() {
     pendingMinDrawValue: 0,
     colorChoicePlayerId: null,
     colorChoiceMode: null,
-    colorChoiceCardValue: null,
     skipChain: 0,
     logs: [logLine("System", `Room ${roomCode} created`)],
     chat: [],
@@ -1255,13 +1253,16 @@ function renderHand() {
   const top = getTopCard();
   const inTurn = state.players[state.currentPlayerIndex]?.id === self.id;
   const awaitingColorChoice = state.colorChoicePlayerId === self.id;
+  const turnActive = inTurn && !awaitingColorChoice;
+
+  el.handArea.classList.toggle("turn-active", turnActive);
 
   el.handArea.innerHTML = self.hand
     .map((card, index) => {
-      const playable = inTurn && !awaitingColorChoice && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue);
+      const playable = turnActive && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue);
       const selected = playMode === "multi" && selectedCards.has(card.id);
       const delay = Math.min(index * 14, 170);
-      return `<button class="uno-card card-${card.color} ${selected ? "selected" : ""} ${playable ? "" : "disabled"}" data-card-id="${card.id}" style="--entry-delay:${delay}ms">
+      return `<button class="uno-card card-${card.color} ${playable ? "playable" : "disabled"} ${selected ? "selected" : ""}" ${playable ? "" : "disabled"} data-card-id="${card.id}" style="--entry-delay:${delay}ms">
         ${cardContent(card)}
       </button>`;
     })
@@ -1273,7 +1274,7 @@ function renderHand() {
       if (!id) return;
       const card = self.hand.find((c) => c.id === id);
       if (!card) return;
-      const playable = inTurn && !awaitingColorChoice && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue);
+      const playable = turnActive && canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue);
 
       if (!playable) return;
 
@@ -1473,7 +1474,7 @@ function buildDeck() {
       deck.push(makeCard(color, String(v)));
     }
 
-    ["skip", "reverse", "draw2", "draw4", "draw6", "draw10", "discardall", "skipeveryone"].forEach((value) => {
+    ["skip", "reverse", "draw2", "draw10", "discardall", "skipeveryone"].forEach((value) => {
       deck.push(makeCard(color, value));
       deck.push(makeCard(color, value));
     });
@@ -1484,8 +1485,18 @@ function buildDeck() {
   }
 
   for (let i = 0; i < 7; i += 1) {
+    deck.push(makeCard("wild", "draw4"));
+  }
+
+  for (let i = 0; i < 7; i += 1) {
     deck.push(makeCard("wild", "wildreverse4"));
+  }
+
+  for (let i = 0; i < 7; i += 1) {
     deck.push(makeCard("wild", "wilddraw6"));
+  }
+
+  for (let i = 0; i < 7; i += 1) {
     deck.push(makeCard("wild", "wilddraw10"));
   }
 
@@ -1528,10 +1539,10 @@ function cardContent(card) {
   if (card.value === "wild") {
     return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild Color Roulette" />`;
   }
-  if (card.value === "wild4") {
-    return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild Reverse Draw 4" />`;
+  if (card.value === "wild4" || card.value === "draw4") {
+    return `<img src="${getSpecialCardAsset(card)}" class="card-asset" draggable="false" alt="Wild Draw 4" />`;
   }
-  if (card.value === "draw4" || card.value === "draw6" || card.value === "draw10" || card.value === "wildreverse4" || card.value === "wilddraw6" || card.value === "wilddraw10") {
+  if (card.value === "draw6" || card.value === "draw10" || card.value === "wildreverse4" || card.value === "wilddraw6" || card.value === "wilddraw10") {
     return `<div class="card-face-special">
       <span class="corner tl">${cardFace(card)}</span>
       <span class="center">${cardFace(card)}</span>

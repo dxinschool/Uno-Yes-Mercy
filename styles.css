@@ -653,6 +653,37 @@ input:focus {
   touch-action: pan-x;
 }
 
+.hand-area:not(.turn-active) .uno-card {
+  opacity: 0.55;
+  filter: saturate(0.75) grayscale(0.08);
+}
+
+.hand-area.turn-active .uno-card.playable {
+  opacity: 1;
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.38),
+    0 0 0 1px rgba(103, 232, 249, 0.5) inset,
+    0 0 22px rgba(103, 232, 249, 0.24);
+}
+
+.hand-area.turn-active .uno-card.playable:hover {
+  transform: translateY(-10px) scale(1.05);
+  box-shadow:
+    0 24px 40px rgba(0, 0, 0, 0.44),
+    0 0 0 1px rgba(103, 232, 249, 0.7) inset,
+    0 0 28px rgba(103, 232, 249, 0.34);
+}
+
+.hand-area .uno-card.disabled {
+  opacity: 0.34;
+  cursor: not-allowed;
+  filter: grayscale(0.2) saturate(0.7);
+}
+
+.hand-area .uno-card.disabled:hover {
+  transform: none;
+}
+
 .hand-area::-webkit-scrollbar {
   height: 6px;
 }
