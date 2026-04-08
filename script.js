@@ -1474,7 +1474,7 @@ function buildDeck() {
       deck.push(makeCard(color, String(v)));
     }
 
-    ["skip", "reverse", "draw2", "draw10", "discardall", "skipeveryone"].forEach((value) => {
+    ["skip", "reverse", "draw2", "discardall", "skipeveryone"].forEach((value) => {
       deck.push(makeCard(color, value));
       deck.push(makeCard(color, value));
     });
