@@ -3,7 +3,7 @@ const path = require("path");
 const express = require("express");
 const { WebSocketServer, WebSocket } = require("ws");
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = Number(process.env.PORT || 8000);
 const MAX_PLAYERS = 10;
 
 const app = express();

@@ -1108,7 +1108,7 @@ function publishState() {
 }
 
 function render() {
-  const inRoom = !!state;
+  const inRoom = !!state && !!state.phase;
   el.lobbyView.classList.toggle("active", !inRoom);
   el.gameView.classList.toggle("active", inRoom);
 
