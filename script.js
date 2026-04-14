@@ -1684,12 +1684,14 @@ function loadServerUrl() {
 
   const stored = localStorage.getItem(STORAGE_SERVER_KEY);
   if (stored && sanitizeServerUrl(stored)) return stored;
+  // Prefer the explicit project default backend (Render host) when available.
+  if (DEFAULT_SERVER_URL) return DEFAULT_SERVER_URL;
+  // Otherwise, use same-host (useful for local dev when served over http/s).
   if (location.protocol === "http:" || location.protocol === "https:") {
     const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
     return `${wsProtocol}//${location.host}`;
   }
-  // Use the explicit project default backend if available, otherwise fall back to localhost.
-  if (DEFAULT_SERVER_URL) return DEFAULT_SERVER_URL;
+  // Fallback to localhost WebSocket.
   return "ws://localhost:8080";
 }
 
