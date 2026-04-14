@@ -183,6 +183,7 @@ function createRoom() {
   state = {
     roomCode,
     hostId: host.id,
+    phase: "lobby",
     version: 1,
     players: [host],
     deck: [],
@@ -506,7 +507,17 @@ function hostPushChat(playerId, text) {
 
 function playSelectedCards() {
   if (!state) return;
-  const cards = [...selectedCards];
+  const self = getSelf();
+  const top = getTopCard();
+  let cards = [...selectedCards];
+
+  if (playMode === "single" && cards.length === 0 && self) {
+    const fallbackCard = self.hand.find((card) => canPlayCard(card, self, top, state.currentColor, state.pendingDraw, state.pendingMinDrawValue));
+    if (fallbackCard) {
+      cards = [fallbackCard.id];
+    }
+  }
+
   if (cards.length === 0) {
     setLobbyStatus("Select at least one card");
     return;
@@ -1143,11 +1154,12 @@ function render() {
   const self = getSelf();
   const inTurn = current && self && current.id === self.id;
   const awaitingColorChoice = state.colorChoicePlayerId === (self && self.id);
+  const hasPlayableCard = !!self && self.hand.some((card) => canPlayCard(card, self, getTopCard(), state.currentColor, state.pendingDraw, state.pendingMinDrawValue));
 
   el.readyBtn.disabled = state.phase !== "lobby";
   el.startBtn.disabled = !(isHost() && state.phase === "lobby" && state.players.filter((p) => p.ready || p.isHost).length >= 2);
-  el.playBtn.hidden = playMode !== "multi";
-  el.playBtn.disabled = playMode !== "multi" || state.phase !== "playing" || !inTurn || selectedCards.size === 0 || awaitingColorChoice;
+  el.playBtn.hidden = false;
+  el.playBtn.disabled = state.phase !== "playing" || !inTurn || awaitingColorChoice || (playMode === "multi" ? selectedCards.size === 0 : !hasPlayableCard);
   el.drawBtn.disabled = state.phase !== "playing" || !inTurn || awaitingColorChoice || (!state.pendingDraw && hasPlayableCard(self));
   el.unoBtn.disabled = !(self && self.hand.length === 1 && state.phase === "playing");
 
@@ -1640,7 +1652,7 @@ function syncPlayModeControls() {
     el.multiSelectModeBtn.setAttribute("aria-pressed", String(!isSingle));
   }
   if (el.playBtn) {
-    el.playBtn.textContent = isSingle ? "Click a Card to Play" : "Play Selected";
+    el.playBtn.textContent = isSingle ? "Play Card" : "Play Selected";
   }
 }
 
@@ -1672,12 +1684,12 @@ function loadServerUrl() {
 
   const stored = localStorage.getItem(STORAGE_SERVER_KEY);
   if (stored && sanitizeServerUrl(stored)) return stored;
-  // Use the explicit project default backend if available, otherwise fall back to same-host or localhost.
-  if (DEFAULT_SERVER_URL) return DEFAULT_SERVER_URL;
   if (location.protocol === "http:" || location.protocol === "https:") {
     const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
     return `${wsProtocol}//${location.host}`;
   }
+  // Use the explicit project default backend if available, otherwise fall back to localhost.
+  if (DEFAULT_SERVER_URL) return DEFAULT_SERVER_URL;
   return "ws://localhost:8080";
 }
 
